@@ -61,25 +61,44 @@ MCP_CONFIG = BASE_DIR / "MCP_servers.json"
 MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MSGS = 20
 MAX_TOOL_RESULT = 4000   # long tool output overwhelms a small model's context
+MEMORY_IDLE_SECONDS = int(os.environ.get("GAME_AI_MEMORY_IDLE", "60"))  # auto-memory runs after this long without typing (0 = off)
 
-SYSTEM_PROMPT = """You are a gaming assistant. The user ({user_name}) is a bilingual(Swedish/English) gamer and developer who prefers short, concise answers.
-Rules:
+# ---------------- System prompt ----------------
+# Built fresh every turn from sections. Tool instructions live next to each server in MCP_servers.json
+# ("prompt" field) and are only included when that server actually started, so the model is never told
+# about a tool it doesn't have.
+PROMPT_IDENTITY = """You are a gaming assistant. The user ({user_name}) is a bilingual (Swedish/English) gamer and developer \
+who prefers short, concise answers."""
+
+PROMPT_RULES = """Rules:
+- Reply in the language the user writes in (Swedish or English).
 - Be short and direct: conclusion first, then only the necessary steps.
-- Only use a tool when the question actually needs it. For greetings, small talk, or things you already know, answer directly without tools.
-- Greetings, small talk, thanks, and general questions: answer directly. Do NOT call any tool.
-- Only when the user asks about something that can change (guides, builds, patches, events, numbers, news), search before answering. Do not make things up.
-- If search snippets are not enough, open the most relevant page with the tool and read it.
-- When the user sends a screenshot, look at it carefully before answering.
-- For exact math (damage, odds, resources, frame times) or to verify code/algorithms, write Python and run it with run_python_code. Always print the result.
-- Answer in English/Swedish based on the current context.
-Memory:
-- You have long-term memory. When the user tells you something lasting about themselves (name, games they play,
-  progress, characters/builds, preferences, habits), call add_observations with entityName "{user_name}" and one short English sentence per fact.
-- If the user says a fact is wrong or asks you to forget it, call delete_observations.
-- Do not store temporary or one-off questions.
-What you currently remember about the user:
-{memory}
-Today is {date}."""
+- Greetings, small talk, thanks, and things you reliably know: answer directly, without tools.
+- If you are not sure and no tool can check it, say so. Never make up facts, numbers, links, or builds.
+- When the user sends a screenshot, look at it carefully before answering."""
+
+PROMPT_MEMORY = """What you currently remember about the user:
+{memory}"""
+
+PROMPT_ENV = "Now: {date} ({weekday}), {time} local time."
+
+
+def build_system_prompt() -> str:
+    sections = [PROMPT_IDENTITY, PROMPT_RULES]
+    shown = {server_of(t["function"]["name"]) for t in model_tools()}
+    hints = [h for s, h in hub.hints.items() if s in shown]
+    if hints:
+        sections.append("Tools (use one only when the request needs it):\n" + "\n".join(f"- {h}" for h in hints))
+    if "read_graph" in hub.route:
+        sections.append(PROMPT_MEMORY)
+    sections.append(PROMPT_ENV)
+    now = datetime.datetime.now()
+    return "\n\n".join(sections).format(   # values are inserted as-is, so braces in memory are safe
+        user_name=USER_NAME,
+        memory=load_memory() if "read_graph" in hub.route else "",
+        date=now.date().isoformat(), weekday=now.strftime("%A"), time=now.strftime("%H:%M"))
+
+
 GREETING_NAME = "" if USER_NAME in ("User", "Friend") else USER_NAME             # shown in the greeting
 
 
@@ -170,6 +189,7 @@ class MCPHub:
         self.route: dict[str, ClientSession] = {}
         self.tool_server: dict[str, str] = {}     # tool name -> server name
         self.failed: list[str] = []          # servers that could not start
+        self.hints: dict[str, str] = {}      # server name -> its "prompt" text for the system prompt
         self._ready = threading.Event()
         self._loop = asyncio.new_event_loop()
         cfg = {}
@@ -234,7 +254,9 @@ class MCPHub:
                             "parameters": t.input_schema or {"type": "object", "properties": {}},
                         },
                     })
-                print(f"[MCP] OK {name}: {', '.join(t.name for t in listed.tools)}", flush=True)
+                if spec.get("prompt"):
+                    self.hints[name] = spec["prompt"]
+                print(f"[MCP] OK {name}:{', '.join(t.name for t in listed.tools)}", flush=True)
             self._ready.set()
             await self._stop.wait()
 
@@ -309,7 +331,7 @@ def load_memory() -> str:
 # the most redundant MEMORY_PRUNE_FRACTION of the sentences are deleted: each sentence is embedded,
 # the pair with the highest cosine similarity is found, and the OLDER sentence of that pair is deleted;
 # repeat until enough are gone. If the embedding model is unavailable, the oldest sentences go instead.
-_prune_lock = threading.Lock()
+_prune_lock = threading.RLock()   # also guards remember/forget, which call prune_memory while holding it
 
 
 def _memory_items() -> list[tuple[str, str]]:
@@ -321,11 +343,16 @@ def _item_size(entity: str, obs: str) -> int:
     return len(obs) + (0 if entity == USER_NAME else len(entity) + 2) + 3   # "- " prefix and newline
 
 
+def _embed(texts: list[str], keep_alive="5m") -> np.ndarray:
+    """Unit-length embeddings, one row per text."""
+    resp = client.embed(model=EMBED_MODEL, input=texts, keep_alive=keep_alive)
+    emb = np.array(resp.embeddings, dtype=np.float32)
+    return emb / (np.linalg.norm(emb, axis=1, keepdims=True) + 1e-9)
+
+
 def pick_redundant(texts: list[str], k: int) -> list[int]:
     """Indices of the k most redundant entries (higher cosine similarity goes first, older goes first)."""
-    resp = client.embed(model=EMBED_MODEL, input=texts, keep_alive=0)
-    emb = np.array(resp.embeddings, dtype=np.float32)
-    emb /= np.linalg.norm(emb, axis=1, keepdims=True) + 1e-9
+    emb = _embed(texts, keep_alive=0)
     sim = emb @ emb.T
     np.fill_diagonal(sim, -1.0)
     dropped = []
@@ -378,6 +405,209 @@ def _startup_memory():
 threading.Thread(target=_startup_memory, daemon=True).start()
 
 
+# ---- Memory tools for the model ----
+# The memory server's own add_observations/delete_observations take a nested schema that a small model
+# keeps getting wrong, so the model sees these two flat tools instead and the app translates the calls.
+MEMORY_TOOLS = [
+    {"type": "function", "function": {
+        "name": "remember",
+        "description": "Save lasting facts about the user to long-term memory.",
+        "parameters": {"type": "object", "required": ["facts"], "properties": {"facts": {
+            "type": "array", "items": {"type": "string"},
+            "description": "One short English sentence per fact, e.g. \"Plays Elden Ring.\""}}}}},
+    {"type": "function", "function": {
+        "name": "forget",
+        "description": "Delete facts from long-term memory that are wrong or that the user wants forgotten.",
+        "parameters": {"type": "object", "required": ["facts"], "properties": {"facts": {
+            "type": "array", "items": {"type": "string"},
+            "description": "The facts to delete, as they appear in memory."}}}}},
+]
+MEMORY_TOOL_NAMES = {t["function"]["name"] for t in MEMORY_TOOLS}
+DUPLICATE_SIM = 0.9   # a new fact this similar to a stored one is not saved again
+FORGET_SIM = 0.75     # a fact to forget matches the stored fact it is at least this similar to
+
+
+def model_tools() -> list[dict]:
+    """Tool definitions sent to the model."""
+    return hub.tools + (MEMORY_TOOLS if "add_observations" in hub.route else [])
+
+
+def server_of(tool: str):
+    return hub.tool_server.get("add_observations" if tool in MEMORY_TOOL_NAMES else tool)
+
+
+def _facts_arg(args: dict) -> list[str]:
+    """Accept the shapes a small model actually sends: a list, a single string, or a list as a JSON string."""
+    value = args.get("facts", next(iter(args.values()), []))
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
+    if isinstance(value, str):
+        value = [value]
+    return [str(v).strip() for v in value if str(v).strip()] if isinstance(value, list) else []
+
+
+def remember_facts(facts: list[str]) -> str:
+    facts = list(dict.fromkeys(f for f in facts if f))[:10]
+    if not facts:
+        return "Tool error: give the facts as a list of short sentences."
+    with _prune_lock:
+        stored = [o for e, o in _memory_items() if e == USER_NAME]
+        known = {o.lower() for o in stored}
+        facts = [f for f in facts if f.lower() not in known]
+        if facts and stored:
+            try:  # skip facts that say the same thing as a stored one
+                emb = _embed(facts + stored)
+                sim = emb[:len(facts)] @ emb[len(facts):].T
+                facts = [f for f, row in zip(facts, sim) if row.max() < DUPLICATE_SIM]
+            except Exception as e:  # noqa: BLE001
+                print(f"[Memory] Duplicate check skipped: {e!r}", flush=True)
+        if not facts:
+            return "Already remembered."
+        hub.call("add_observations", {"observations": [{"entityName": USER_NAME, "contents": facts}]})
+        prune_memory()
+    print(f"[Memory] Saved: {facts}", flush=True)
+    return "Saved: " + " ".join(facts)
+
+
+def forget_facts(facts: list[str]) -> str:
+    if not facts:
+        return "Tool error: give the facts to forget as a list of sentences."
+    with _prune_lock:
+        items = _memory_items()
+        if not items:
+            return "Memory is empty."
+        lower = {o.lower(): (e, o) for e, o in items}
+        hits = [lower[f.lower()] for f in facts if f.lower() in lower]
+        rest = [f for f in facts if f.lower() not in lower]
+        if rest:  # the model rarely repeats a stored sentence word for word
+            try:
+                emb = _embed(rest + [o for _, o in items])
+                sim = emb[:len(rest)] @ emb[len(rest):].T
+                hits += [items[int(row.argmax())] for row in sim if row.max() >= FORGET_SIM]
+            except Exception as e:  # noqa: BLE001
+                print(f"[Memory] Fuzzy match failed: {e!r}", flush=True)
+        if not hits:
+            return "No matching facts found in memory."
+        by_entity: dict[str, list[str]] = {}
+        for ent, obs in dict.fromkeys(hits):
+            by_entity.setdefault(ent, []).append(obs)
+        hub.call("delete_observations", {"deletions": [
+            {"entityName": ent, "observations": obs} for ent, obs in by_entity.items()]})
+    return "Deleted: " + " ".join(o for obs in by_entity.values() for o in obs)
+
+
+def run_tool(name: str, args: dict) -> str:
+    if name == "remember":
+        return remember_facts(_facts_arg(args))
+    if name == "forget":
+        return forget_facts(_facts_arg(args))
+    return hub.call(name, args)
+
+
+# ---- Automatic memory ----
+# When a reply has finished and the user has not typed for MEMORY_IDLE_SECONDS, the messages that have not
+# been looked at yet are given to the model, which lists any lasting facts about the user. Those go through
+# remember_facts, which compares them with stored memory by cosine similarity and skips duplicates.
+# Typing (reported by the page) or a new message restarts the wait.
+SUMMARY_PROMPT = """You keep long-term memory about the user {user_name}, a gamer and developer. Read the new \
+conversation messages below and list lasting facts about the user that the USER said: games they play, progress, \
+characters/builds, projects, preferences, habits, important plans.
+- One short English sentence per fact, without the name, e.g. "Plays a mage build in Elden Ring."
+- Skip anything already in memory, one-off questions, small talk, and general knowledge.
+- If there is nothing new, return an empty list.
+
+Already in memory:
+{memory}
+
+New messages:
+{conversation}"""
+SUMMARY_SCHEMA = {"type": "object", "required": ["facts"],
+                  "properties": {"facts": {"type": "array", "items": {"type": "string"}}}}
+_pending: list[dict] = []     # messages not summarized yet
+_cursor = 0                   # how many messages of the current conversation are already queued
+_pending_lock = threading.Lock()
+_replying = threading.Event()  # set while a chat reply is being generated
+_last_activity = time.monotonic()  # last time a reply finished or the user typed
+
+
+def track_turn(past: list[dict], turn: list[dict]):
+    """Queue only the messages after the last queued position. The page sends the whole conversation each
+    time and only appends finished turns, so the next new message is at position len(past)."""
+    global _cursor
+    with _pending_lock:
+        if len(past) != _cursor:   # a new chat (empty history), or the app restarted under an open page
+            _cursor = 0
+        convo = past + turn
+        _pending.extend(convo[_cursor:])
+        _cursor = len(convo)
+
+
+def summarize_to_memory(msgs: list[dict]):
+    convo = "\n".join(f"{m['role']}: {_short(m['content'], 800)}" for m in msgs)[-6000:]
+    options = {"temperature": 0, "num_ctx": NUM_CTX}
+    if CPU_ONLY:
+        options["num_gpu"] = 0
+    resp = client.chat(
+        model=MODEL,
+        messages=[{"role": "user", "content": SUMMARY_PROMPT.format(
+            user_name=USER_NAME, memory=load_memory(), conversation=convo)}],
+        format=SUMMARY_SCHEMA, think=False, options=options, keep_alive="30m",
+    )
+    facts = _facts_arg(json.loads(resp.message.content or "{}"))
+    if facts:
+        print(f"[Memory] Auto-summary: {remember_facts(facts)}", flush=True)
+
+
+def mark_activity():
+    global _last_activity
+    _last_activity = time.monotonic()
+
+
+def _summary_loop():
+    hub._ready.wait()
+    while True:
+        time.sleep(2)
+        if (_replying.is_set() or "add_observations" not in hub.route
+                or time.monotonic() - _last_activity < MEMORY_IDLE_SECONDS):
+            continue
+        run_auto_memory()
+
+
+_summary_lock = threading.Lock()   # one summary at a time (idle loop or app exit)
+
+
+def run_auto_memory():
+    """Summarize the messages not looked at yet into memory."""
+    if "add_observations" not in hub.route:
+        return
+    with _summary_lock:
+        with _pending_lock:
+            batch = _pending[:]
+            _pending.clear()
+        if not any(m["role"] == "user" for m in batch):
+            return
+        try:
+            summarize_to_memory(batch)
+        except Exception as e:  # noqa: BLE001
+            print(f"[Memory] Auto-summary failed: {e!r}", flush=True)
+            with _pending_lock:   # try these messages again next time
+                _pending[:0] = batch
+
+
+def flush_memory():
+    """On exit: save what the idle wait has not saved yet (waits for a summary that is already running)."""
+    if MEMORY_IDLE_SECONDS > 0 and hub.ready:
+        print("[Memory] Saving the last messages before exit ...", flush=True)
+        run_auto_memory()
+
+
+if MEMORY_IDLE_SECONDS > 0:
+    threading.Thread(target=_summary_loop, daemon=True).start()
+
+
 # ---------------- Chat logic ----------------
 DEFAULT_PROMPT = "What is going on in this image? What should I do?"
 MAX_IMAGES = 4
@@ -401,21 +631,41 @@ def _short(value, n=90) -> str:
     return text if len(text) <= n else text[: n - 1] + "..."
 
 
+def _text_history(history) -> list[dict]:
+    """Old screenshots and tool results are not resent: saves RAM and context."""
+    return [{"role": m["role"], "content": m["content"]}
+            for m in (history or [])
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
+
+
 def chat_stream(text: str, images, history):
+    """Run one turn and yield events for the page; afterwards queue the exchange for the memory summary."""
+    _replying.set()
+    answer = None
+    try:
+        for ev in _chat_turn(text, images, history):
+            if ev["type"] == "done":
+                answer = ev["answer"]
+            yield ev
+    finally:  # also runs when the user stops the reply
+        if answer is not None:   # a stopped or failed turn is not kept by the page either
+            track_turn(_text_history(history), [
+                {"role": "user", "content": (text or "").strip() or DEFAULT_PROMPT},
+                {"role": "assistant", "content": answer}])
+        mark_activity()   # the idle wait for auto-memory starts now
+        _replying.clear()
+
+
+def _chat_turn(text: str, images, history):
     """Run one turn and yield events for the page (one JSON object each)."""
     text = (text or "").strip() or DEFAULT_PROMPT
     new_user = {"role": "user", "content": text}
     pics = _decode_images(images)
     if pics:
         new_user["images"] = pics
-    # Old screenshots and tool results are not resent: saves RAM and context
-    past = [{"role": m["role"], "content": m["content"]}
-            for m in (history or [])[-MAX_HISTORY_MSGS:]
-            if isinstance(m, dict) and m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
+    past = _text_history(history)[-MAX_HISTORY_MSGS:]
     prune_memory()
-    system = {"role": "system",
-              "content": SYSTEM_PROMPT.format(date=datetime.date.today().isoformat(),
-                                              memory=load_memory(), user_name=USER_NAME)}
+    system = {"role": "system", "content": build_system_prompt()}
     msgs = [system, *past, new_user]
 
     options = {"num_ctx": NUM_CTX}
@@ -425,12 +675,13 @@ def chat_stream(text: str, images, history):
     answer = ""
     try:
         for rnd in range(MAX_TOOL_ROUNDS + 1):
-            use_tools = bool(hub.tools) and rnd < MAX_TOOL_ROUNDS
+            tools = model_tools()
+            use_tools = bool(tools) and rnd < MAX_TOOL_ROUNDS
             content, tool_calls = "", []
             stream = client.chat(
                 model=MODEL,
                 messages=msgs,
-                tools=hub.tools if use_tools else None,
+                tools=tools if use_tools else None,
                 stream=True,
                 options=options,
                 keep_alive="30m",
@@ -459,7 +710,7 @@ def chat_stream(text: str, images, history):
                     start["code"] = str(args.get("python_code") or args.get("code") or first)[:3000]
                 yield start
                 try:
-                    result = hub.call(name, args)
+                    result = run_tool(name, args)
                 except Exception as e:  # noqa: BLE001
                     result = f"Tool failed: {e!r}"
                 if hub.tool_server.get(name) == "search":  # web results: screen before the model sees them
@@ -516,7 +767,7 @@ def icon():
 def api_info():
     return JSONResponse({
         "app": APP_NAME, "model": MODEL, "name": GREETING_NAME, "ready": hub.ready, "failed": hub.failed,
-        "tools": [t["function"]["name"] for t in hub.tools],
+        "tools": [t["function"]["name"] for t in model_tools()],
     }, headers=NO_CACHE)
 
 
@@ -537,6 +788,13 @@ def api_memory():
     except Exception:  # noqa: BLE001
         return JSONResponse({"available": False, "items": []}, headers=NO_CACHE)
     return JSONResponse({"available": True, "items": items}, headers=NO_CACHE)
+
+
+@api.post("/api/typing")
+def api_typing():
+    """The page reports typing, which postpones auto-memory."""
+    mark_activity()
+    return JSONResponse({"ok": True})
 
 
 @api.post("/api/memory/delete")
@@ -589,6 +847,7 @@ if __name__ == "__main__":
             import webview
             webview.create_window(APP_NAME, url, width=1100, height=860, min_size=(520, 480))
             webview.start()          # blocks until the window is closed
+            flush_memory()
             hub.close()
             os._exit(0)
         except Exception as e:  # noqa: BLE001
@@ -599,4 +858,5 @@ if __name__ == "__main__":
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
+        flush_memory()
         hub.close()

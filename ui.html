@@ -485,7 +485,12 @@ details.tool .ok { width: 14px; height: 14px; color: var(--accent); }
 
   /* ---------- composer ---------- */
   function fit() { el.input.style.height = 'auto'; el.input.style.height = Math.min(el.input.scrollHeight, 200) + 'px'; }
-  el.input.addEventListener('input', () => { fit(); updateSend(); });
+  let lastTypingPing = 0;   // typing postpones the server's auto-memory; ping at most every 5 s
+  el.input.addEventListener('input', () => {
+    fit(); updateSend();
+    const now = Date.now();
+    if (now - lastTypingPing > 5000) { lastTypingPing = now; fetch('/api/typing', { method: 'POST' }).catch(() => {}); }
+  });
   el.input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });

@@ -20,6 +20,8 @@ rem 1 = run on CPU only (does not steal VRAM from the game), 0 = use GPU if avai
 set "GAME_AI_CPU_ONLY=0"
 rem Max characters of memory put into the prompt (default 3000; set low, e.g. 200, to test pruning)
 set "GAME_AI_MEMORY_BUDGET=3000"
+rem Auto-memory: save facts from the chat after this many seconds without typing (0 = off)
+set "GAME_AI_MEMORY_IDLE=60"
 rem ==================================
 
 rem ---- 1. Ollama ----

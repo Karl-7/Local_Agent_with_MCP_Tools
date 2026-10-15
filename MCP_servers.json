@@ -3,17 +3,20 @@
     "search": {
       "command": "uvx",
       "args": ["duckduckgo-mcp-server"],
-      "env": { "DDG_SAFE_SEARCH": "STRICT" }
+      "env": { "DDG_SAFE_SEARCH": "STRICT" },
+      "prompt": "Web search: only when the user asks about something that can change (guides, builds, patches, events, numbers, news), search before answering. If the snippets are not enough, open the most relevant page with fetch_content and read it."
     },
     "memory": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-memory"],
       "env": { "MEMORY_FILE_PATH": "${APP_DIR}/memory.jsonl" },
-      "tools": ["add_observations", "delete_observations"]
+      "tools": [],
+      "prompt": "Memory: when the user tells you something lasting about themselves (name, games they play, progress, characters/builds, preferences, habits), call remember with one short English sentence per fact. If the user says a fact is wrong or asks you to forget it, call forget. Do not store one-off questions."
     },
     "python": {
       "command": "uvx",
-      "args": ["mcp-run-python", "stdio"]
+      "args": ["mcp-run-python", "stdio"],
+      "prompt": "run_python_code: for exact math (damage, odds, resources, frame times) or to verify code/algorithms, write Python and run it. Always print the result."
     }
   }
 }
