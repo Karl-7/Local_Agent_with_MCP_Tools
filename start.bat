@@ -5,7 +5,7 @@ title Sigge's AI Assistant
 
 rem ============ Settings ============
 rem Chat model: qwen3.5:4b (~3.4GB, smarter)  /  qwen3.5:2b (~2.7GB, lighter)  /  qwen3.5:0.8b (~1GB, fastest)
-set "GAME_AI_MODEL=qwen3.5:4b"
+set "GAME_AI_MODEL=qwen3.5:0.8b"
 rem Embedding model, only used when pruning memory: nomic-embed-text (~270MB)
 set "GAME_AI_EMBED_MODEL=nomic-embed-text"
 rem Content filter for web results: llama-guard3:1b (~1.6GB). Chat model + filter together need roughly 5-6GB of RAM.

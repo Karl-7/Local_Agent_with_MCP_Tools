@@ -46,7 +46,7 @@ if sys.stderr is None:
 BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 
 # ---------------- Settings (override them in start.bat) ----------------
-MODEL = os.environ.get("GAME_AI_MODEL", "qwen3.5:4b")
+MODEL = os.environ.get("GAME_AI_MODEL", "qwen3.5:0.8b")
 GUARD_MODEL = os.environ.get("GAME_AI_GUARD_MODEL", "llama-guard3:1b")   # content filter for web results
 NUM_CTX = int(os.environ.get("GAME_AI_NUM_CTX", "8192"))       # bigger context = more RAM
 CPU_ONLY = os.environ.get("GAME_AI_CPU_ONLY", "0") == "1"   # 1 = don't touch the GPU
