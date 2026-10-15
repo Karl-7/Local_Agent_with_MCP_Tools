@@ -95,7 +95,7 @@ GREETING_NAME = "" if USER_NAME in ("User", "Friend") else USER_NAME            
 #   3. An opened web page that is flagged is blocked as a whole.
 #   4. If the guard itself fails, the results are withheld (fail closed).
 ADULT_REPLY = "wait bro I'm not sure if it's ok for you to ask this :o -- Karl"
-GUARD_CODES = {"s12", "s4"}      # Llama Guard categories: S12 sexual content, S4 child sexual exploitation
+GUARD_CODES = {"s12", "s4","s3","s11"}      # Llama Guard categories: S12 sexual content, S4 child sexual exploitation
 GUARD_BLOCK_RATIO = 0.5
 PAGE_BLOCKED = "(This page was blocked by the content filter.)"
 RESULTS_BLOCKED = "(These search results were blocked by the content filter.)"
