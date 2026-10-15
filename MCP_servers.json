@@ -9,7 +9,7 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-memory"],
       "env": { "MEMORY_FILE_PATH": "${APP_DIR}/memory.jsonl" },
-      "tools": ["add_observations", "delete_observations", "search_nodes"]
+      "tools": ["add_observations", "delete_observations"]
     },
     "python": {
       "command": "uvx",

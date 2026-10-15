@@ -5,7 +5,7 @@ title Sigge's AI Assistant
 
 rem ============ Settings ============
 rem Chat model: qwen3.5:4b (~3.4GB, smarter)  /  qwen3.5:2b (~2.7GB, lighter)  /  qwen3.5:0.8b (~1GB, fastest)
-set "GAME_AI_MODEL=qwen3.5:4b"
+set "GAME_AI_MODEL=qwen3.5:0.8b"
 rem Embedding model, only used when pruning memory: nomic-embed-text (~270MB)
 set "GAME_AI_EMBED_MODEL=nomic-embed-text"
 rem Content filter for web results: llama-guard3:1b (~1.6GB). Chat model + filter together need roughly 5-6GB of RAM.
@@ -19,7 +19,7 @@ set "GAME_AI_NUM_CTX=8192"
 rem 1 = run on CPU only (does not steal VRAM from the game), 0 = use GPU if available
 set "GAME_AI_CPU_ONLY=0"
 rem Max characters of memory put into the prompt (default 3000; set low, e.g. 200, to test pruning)
-set "GAME_AI_MEMORY_BUDGET=200"
+set "GAME_AI_MEMORY_BUDGET=3000"
 rem ==================================
 
 rem ---- 1. Ollama ----
