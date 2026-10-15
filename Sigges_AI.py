@@ -4,7 +4,7 @@
 #     "ollama>=0.6",
 #     "fastapi",
 #     "uvicorn",
-#     "mcp>=1.2",
+#     "mcp>=2,<3",
 #     "pywebview>=5",
 #     "numpy",
 # ]
@@ -65,7 +65,9 @@ MAX_TOOL_RESULT = 4000   # long tool output overwhelms a small model's context
 SYSTEM_PROMPT = """You are a gaming assistant. The user ({user_name}) is a bilingual(Swedish/English) gamer and developer who prefers short, concise answers.
 Rules:
 - Be short and direct: conclusion first, then only the necessary steps.
-- For anything that can change (guides, builds, patches, events, numbers, news), use the search tool first. Do not make things up.
+- Only use a tool when the question actually needs it. For greetings, small talk, or things you already know, answer directly without tools.
+- Greetings, small talk, thanks, and general questions: answer directly. Do NOT call any tool.
+- Only when the user asks about something that can change (guides, builds, patches, events, numbers, news), search before answering. Do not make things up.
 - If search snippets are not enough, open the most relevant page with the tool and read it.
 - When the user sends a screenshot, look at it carefully before answering.
 - For exact math (damage, odds, resources, frame times) or to verify code/algorithms, write Python and run it with run_python_code. Always print the result.
@@ -178,6 +180,7 @@ class MCPHub:
         threading.Thread(target=self._loop.run_forever, daemon=True).start()
         self._stop = None
         self._main_future = asyncio.run_coroutine_threadsafe(self._main(cfg), self._loop)
+        self._main_future.add_done_callback(self._on_main_done)
         # No waiting here: the window opens at once, and the tools appear as they finish starting
         # (the first launch downloads the tool packages, which can take a few minutes).
 
@@ -228,12 +231,18 @@ class MCPHub:
                         "function": {
                             "name": t.name,
                             "description": t.description or "",
-                            "parameters": t.inputSchema or {"type": "object", "properties": {}},
+                            "parameters": t.input_schema or {"type": "object", "properties": {}},
                         },
                     })
                 print(f"[MCP] OK {name}: {', '.join(t.name for t in listed.tools)}", flush=True)
             self._ready.set()
             await self._stop.wait()
+
+    def _on_main_done(self, fut):
+        """Without this, a crash in _main is silent and the tools never become ready."""
+        if not fut.cancelled() and fut.exception() is not None:
+            print(f"[MCP] ERROR: tool manager crashed: {fut.exception()!r}", flush=True)
+            self._ready.set()  # don't leave _startup_memory waiting forever
 
     async def _call(self, name: str, args: dict) -> str:
         session = self.route.get(name)
@@ -242,7 +251,7 @@ class MCPHub:
         resp = await asyncio.wait_for(session.call_tool(name, args), timeout=60)
         parts = [getattr(c, "text", None) or f"[{c.type} content]" for c in resp.content]
         text = "\n".join(parts) or "(the tool returned nothing)"
-        return ("Tool error: " if resp.isError else "") + text
+        return ("Tool error: " if getattr(resp, "is_error", False) else "") + text
 
     @property
     def ready(self) -> bool:
@@ -493,6 +502,14 @@ def page():
     if not ui.exists():
         return PlainTextResponse("ui.html is missing. Put it in the same folder as app.py.", status_code=500)
     return FileResponse(ui, headers=NO_CACHE)
+
+
+@api.get("/icon.jpg")
+def icon():
+    path = BASE_DIR / "icon.jpg"
+    if not path.exists():
+        return PlainTextResponse("", status_code=404)
+    return FileResponse(path)
 
 
 @api.get("/api/info")

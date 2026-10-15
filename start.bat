@@ -5,7 +5,7 @@ title Sigge's AI Assistant
 
 rem ============ Settings ============
 rem Chat model: qwen3.5:4b (~3.4GB, smarter)  /  qwen3.5:2b (~2.7GB, lighter)  /  qwen3.5:0.8b (~1GB, fastest)
-set "GAME_AI_MODEL=qwen3.5:0.8b"
+set "GAME_AI_MODEL=qwen3.5:4b"
 rem Embedding model, only used when pruning memory: nomic-embed-text (~270MB)
 set "GAME_AI_EMBED_MODEL=nomic-embed-text"
 rem Content filter for web results: llama-guard3:1b (~1.6GB). Chat model + filter together need roughly 5-6GB of RAM.
@@ -95,8 +95,8 @@ if errorlevel 1 (
   )
 )
 
-rem ---- 7. Desktop shortcut with icon (created once) ----
-powershell -NoProfile -Command "$d=[Environment]::GetFolderPath('Desktop'); $l=Join-Path $d 'Sigges AI Assistant.lnk'; if(-not (Test-Path $l)){ $s=(New-Object -ComObject WScript.Shell).CreateShortcut($l); $s.TargetPath='%~dp0start.bat'; $s.WorkingDirectory='%~dp0'; $s.WindowStyle=7; if(Test-Path '%~dp0icon.jpg'){ $s.IconLocation='%~dp0icon.jpg' }; $s.Save() }" >nul 2>nul
+rem ---- 7. Desktop shortcut with icon (refreshed every launch, so icon/path changes are picked up) ----
+powershell -NoProfile -Command "$d=[Environment]::GetFolderPath('Desktop'); $l=Join-Path $d 'Sigges AI Assistant.lnk'; $s=(New-Object -ComObject WScript.Shell).CreateShortcut($l); $s.TargetPath='%~dp0start.bat'; $s.WorkingDirectory='%~dp0'; $s.WindowStyle=7; if(Test-Path '%~dp0icon.ico'){ $s.IconLocation='%~dp0icon.ico,0' }; $s.Save()" >nul 2>nul
 
 echo.
 echo [7/7] Starting the assistant, its window will open by itself.

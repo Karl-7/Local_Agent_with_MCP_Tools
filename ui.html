@@ -4,19 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Game AI</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="/icon.jpg">
 <style>
 :root {
   --bg: #f7f7f4;
   --surface: #ffffff;
   --ink: #1c1d21;
-  --muted: #666a73;
+  --muted: #064e8e;
   --line: #deded8;
   --bubble: #e9e9f6;
   --chip: #efefea;
-  --accent: #4f46e5;
+  --accent: #39a1f6;
   --accent-ink: #ffffff;
-  --danger: #b3261e;
+  --danger: #8d1e18;
   --shadow: 0 1px 2px rgba(20, 20, 30, .05), 0 6px 24px rgba(20, 20, 30, .06);
   --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --mono: "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
@@ -31,9 +31,9 @@
     --line: #2c2e34;
     --bubble: #272940;
     --chip: #25272c;
-    --accent: #8c86ff;
+    --accent: #2aa2ec;
     --accent-ink: #14131f;
-    --danger: #ff8a80;
+    --danger: #f3bb7c;
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 28px rgba(0, 0, 0, .35);
   }
 }
@@ -55,14 +55,15 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 
 /* ---------- top bar ---------- */
 .top {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; gap: 12px;
   min-height: 56px; padding: 0 16px;
 }
-.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.logo { width: 28px; height: 28px; border-radius: 8px; object-fit: cover; flex: none; }
 .name { font-weight: 650; font-size: 16px; letter-spacing: -.005em; }
 .model { color: var(--muted); font: 12.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
-.top-actions { display: flex; gap: 4px; }
+.top-actions { display: flex; gap: 4px; margin-left: -8px; padding-right: 8px; border-right: 1px solid var(--line); }
 .ghost {
   display: inline-flex; align-items: center; gap: 7px;
   min-height: 36px; padding: 0 12px;
@@ -191,9 +192,9 @@ details.tool .ok { width: 14px; height: 14px; color: var(--accent); }
 #scrim { position: fixed; inset: 0; background: rgba(10, 10, 14, .38); opacity: 0; pointer-events: none; transition: opacity .2s; }
 #scrim.on { opacity: 1; pointer-events: auto; }
 #drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(380px, 92vw);
-  background: var(--surface); border-left: 1px solid var(--line);
-  transform: translateX(100%); transition: transform .22s ease; visibility: hidden;
+  position: fixed; top: 0; left: 0; bottom: 0; width: min(380px, 92vw);
+  background: var(--surface); border-right: 1px solid var(--line);
+  transform: translateX(-100%); transition: transform .22s ease; visibility: hidden;
   display: flex; flex-direction: column;
 }
 #drawer.on { transform: none; visibility: visible; }
@@ -237,18 +238,19 @@ details.tool .ok { width: 14px; height: 14px; color: var(--accent); }
 <body>
 
 <header class="top">
-  <div class="brand">
-    <span class="name" id="app-name">Game AI</span>
-    <span class="model" id="model"></span>
-    <span class="status" id="status" hidden><i class="spin"></i>Starting tools</span>
-  </div>
   <div class="top-actions">
-    <button class="ghost" id="btn-memory" type="button">
-      <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="3" width="11" height="14" rx="2"/><path d="M8 7h4M8 10.5h4"/></svg><span>Memory</span>
-    </button>
     <button class="ghost" id="btn-new" type="button">
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 4.5l3 3M4 16l.8-3.2L13.6 4l3 3-8.8 8.8L4 16z"/></svg><span>New chat</span>
     </button>
+    <button class="ghost" id="btn-memory" type="button">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="3" width="11" height="14" rx="2"/><path d="M8 7h4M8 10.5h4"/></svg><span>Memory</span>
+    </button>
+  </div>
+  <div class="brand">
+    <img class="logo" src="/icon.jpg" alt="" onerror="this.remove()">
+    <span class="name" id="app-name">Game AI</span>
+    <span class="model" id="model"></span>
+    <span class="status" id="status" hidden><i class="spin"></i>Starting tools</span>
   </div>
 </header>
 
